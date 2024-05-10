@@ -44,6 +44,8 @@
 
 #define TOUCH_REPORT_CONFIG_SIZE 128
 
+#define TOUCH_FOD_INVALID_ID (-1)
+
 enum touch_status {
 	LIFT = 0,
 	FINGER = 1,
@@ -159,28 +161,33 @@ struct touch_hcd {
 
 static struct touch_hcd *touch_hcd;
 static unsigned int pre_overlap = 0;
+static int fod_id = TOUCH_FOD_INVALID_ID;
 
 #define CENTER_X_MONA 5400
 #define CENTER_Y_MONA 21470
 void touch_fod_test(int value) {
 	if (value) {
 		input_report_key(touch_hcd->input_dev, BTN_INFO, 1);
+		mi_disp_set_fod_queue_work(1, true);
 		input_sync(touch_hcd->input_dev);
 		input_mt_slot(touch_hcd->input_dev, 0);
 		input_mt_report_slot_state(touch_hcd->input_dev, MT_TOOL_FINGER, 1);
 		input_report_key(touch_hcd->input_dev, BTN_TOUCH, 1);
 		input_report_key(touch_hcd->input_dev, BTN_TOOL_FINGER, 1);
 		input_report_abs(touch_hcd->input_dev, ABS_MT_TRACKING_ID, 0);
+		input_report_abs(touch_hcd->input_dev, ABS_MT_WIDTH_MAJOR, 1);
 		input_report_abs(touch_hcd->input_dev, ABS_MT_WIDTH_MINOR, 1);
 		input_report_abs(touch_hcd->input_dev, ABS_MT_POSITION_X, CENTER_X_MONA);
 		input_report_abs(touch_hcd->input_dev, ABS_MT_POSITION_Y, CENTER_Y_MONA);
 		input_sync(touch_hcd->input_dev);
 	} else {
 		input_mt_slot(touch_hcd->input_dev, 0);
+		input_report_abs(touch_hcd->input_dev, ABS_MT_WIDTH_MAJOR, 0);
 		input_report_abs(touch_hcd->input_dev, ABS_MT_WIDTH_MINOR, 0);
 		input_mt_report_slot_state(touch_hcd->input_dev, MT_TOOL_FINGER, 0);
 		input_report_abs(touch_hcd->input_dev, ABS_MT_TRACKING_ID, -1);
 		input_report_key(touch_hcd->input_dev, BTN_INFO, 0);
+		mi_disp_set_fod_queue_work(0, true);
 		input_sync(touch_hcd->input_dev);
 	}
 }
@@ -196,6 +203,7 @@ static void touch_fod_down_event(void)
 		input_sync(touch_hcd->input_dev);
 		LOGI(tcm_hcd->pdev->dev.parent, "FOD DOWN Dfetected\n");
 		tcm_hcd->fod_display_enabled = true;
+		mi_disp_set_fod_queue_work(1, true);
 	}
 }
 
@@ -205,8 +213,13 @@ static void touch_fod_up_event(void)
 
 	LOGI(tcm_hcd->pdev->dev.parent, "FOD UP Detected\n");
 	input_report_key(touch_hcd->input_dev, BTN_INFO, 0);
+	input_mt_slot(touch_hcd->input_dev, fod_id);
+	input_report_abs(touch_hcd->input_dev, ABS_MT_WIDTH_MAJOR, 0);
+	input_report_abs(touch_hcd->input_dev, ABS_MT_WIDTH_MINOR, 0);
 	input_sync(touch_hcd->input_dev);
+	fod_id = TOUCH_FOD_INVALID_ID;
 	tcm_hcd->fod_display_enabled = false;
+	mi_disp_set_fod_queue_work(0, true);
 }
 
 int touch_flush_slots(struct syna_tcm_hcd *tcm_hcd)
@@ -231,9 +244,6 @@ int touch_flush_slots(struct syna_tcm_hcd *tcm_hcd)
 				BTN_TOUCH, 1);
 		input_report_key(touch_hcd->input_dev,
 				BTN_TOOL_FINGER, 1);
-		input_report_abs(touch_hcd->input_dev,
-				ABS_MT_TOUCH_MAJOR, 0);
-
 #ifndef TYPE_B_PROTOCOL
 		input_mt_sync(touch_hcd->input_dev);
 #endif
@@ -274,8 +284,12 @@ int touch_free_objects(struct syna_tcm_hcd *tcm_hcd)
 		/*For FOD_STATUS_DELETED */
 		LOGN(tcm_hcd->pdev->dev.parent, "touch free FOD event\n");
 		touch_fod_up_event();
+	} else {
+		input_sync(touch_hcd->input_dev);
+		input_report_key(touch_hcd->input_dev, BTN_INFO, 0);
+		mi_disp_set_fod_queue_work(0, true);
+		input_sync(touch_hcd->input_dev);
 	}
-
 #ifdef TYPE_B_PROTOCOL
 	for (idx = 0; idx < touch_hcd->max_objects; idx++) {
 		input_mt_slot(touch_hcd->input_dev, idx);
@@ -778,8 +792,8 @@ static void touch_report(void)
 {
 	int retval;
 	unsigned int idx;
-	unsigned int x;
-	unsigned int y;
+	unsigned int x, fod_x;
+	unsigned int y, fod_y;
 	unsigned int fod_overlap;
 	unsigned int temp;
 	unsigned int status;
@@ -795,9 +809,8 @@ static void touch_report(void)
 	if (touch_hcd->input_dev == NULL)
 		return;
 
-	if (tcm_hcd->in_suspending) {
+	if (tcm_hcd->in_suspending)
 		return;
-	}
 
 	if (touch_hcd->suspend_touch)
 		return;
@@ -815,12 +828,13 @@ static void touch_report(void)
 	object_data = touch_hcd->touch_data.object_data;
 
 #if WAKEUP_GESTURE
-	x = le2_to_uint(touch_data->gesture_data.x_pos);
-	y = le2_to_uint(touch_data->gesture_data.y_pos);
+	fod_x = le2_to_uint(touch_data->gesture_data.x_pos);
+	fod_y = le2_to_uint(touch_data->gesture_data.y_pos);
 	fod_overlap = touch_data->gesture_data.area[0];
 	LOGD(tcm_hcd->pdev->dev.parent,
 			"Gesture Event:%02x, Gesture Data:x:%4d, y:%4d, major:%2d, fod_overlap:%2d\n",
-			touch_data->gesture_id, x, y, touch_data->gesture_data.area[1], touch_data->gesture_data.area[0]);
+			touch_data->gesture_id, fod_x, fod_y,
+			touch_data->gesture_data.area[1], touch_data->gesture_data.area[0]);
 	LOGD(tcm_hcd->pdev->dev.parent,
 			"fod_enabled: %d, finger_unlock_status:%d, fod_finger:%d\n",
 			tcm_hcd->fod_enabled, tcm_hcd->finger_unlock_status, tcm_hcd->fod_finger);
@@ -877,6 +891,7 @@ finger_pos:
 			input_mt_slot(touch_hcd->input_dev, idx);
 			input_mt_report_slot_state(touch_hcd->input_dev,
 					MT_TOOL_FINGER, 0);
+			last_touch_events_collect(idx, 0);
 #endif
 			if (tcm_hcd->palm_sensor_enable && tcm_hcd->palm_enable_status) {
 				tcm_hcd->palm_enable_status = 0;
@@ -921,19 +936,29 @@ finger_pos:
 			input_report_abs(touch_hcd->input_dev,
 					ABS_MT_POSITION_Y, y);
 
-			if (tcm_hcd->fod_enabled && tcm_hcd->fod_finger && tcm_hcd->finger_unlock_status) {
+			if (tcm_hcd->fod_finger) {
+				if ((x == fod_x) && (y == fod_y)) {
+					fod_id = idx;
+				}
+			}
+
+			if (fod_id == idx && tcm_hcd->fod_enabled &&
+					tcm_hcd->fod_finger && tcm_hcd->finger_unlock_status) {
 				if (pre_overlap == fod_overlap)
 					fod_overlap++;
-				input_report_abs(touch_hcd->input_dev,
-					ABS_MT_TOUCH_MINOR, fod_overlap);
-				input_report_abs(touch_hcd->input_dev,
-					ABS_MT_TOUCH_MAJOR, touch_data->gesture_data.area[1]);
-
+				input_report_abs(touch_hcd->input_dev, ABS_MT_WIDTH_MINOR,
+					fod_overlap);
+				input_report_abs(touch_hcd->input_dev, ABS_MT_WIDTH_MAJOR,
+					touch_data->gesture_data.area[1]);
 			}
 
 #ifndef TYPE_B_PROTOCOL
 			input_mt_sync(touch_hcd->input_dev);
 #endif
+			if ((touch_hcd->prev_status[idx] != FINGER) &&
+				(touch_hcd->prev_status[idx] != GLOVED_FINGER)) {
+				last_touch_events_collect(idx, 1);
+			}
 			LOGD(tcm_hcd->pdev->dev.parent,
 					"Finger %d: x = %d, y = %d\n",
 					idx, x, y);
@@ -982,10 +1007,9 @@ static int touch_set_input_params(void)
 	input_set_abs_params(touch_hcd->input_dev,
 			ABS_MT_POSITION_Y, 0, touch_hcd->max_y, 0, 0);
 	input_set_abs_params(touch_hcd->input_dev,
-			ABS_MT_TOUCH_MINOR, 0, 100, 0, 0);
+			ABS_MT_WIDTH_MAJOR, 0, 100, 0, 0);
 	input_set_abs_params(touch_hcd->input_dev,
-			ABS_MT_TOUCH_MAJOR, 0, 100, 0, 0);
-
+			ABS_MT_WIDTH_MINOR, 0, 100, 0, 0);
 	input_mt_init_slots(touch_hcd->input_dev, touch_hcd->max_objects,
 			INPUT_MT_DIRECT);
 

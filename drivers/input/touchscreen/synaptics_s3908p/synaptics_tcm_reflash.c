@@ -36,7 +36,6 @@
 
 #include <linux/crc32.h>
 #include <linux/firmware.h>
-#include <linux/hwid.h>
 #include "synaptics_tcm_core.h"
 
 #define STARTUP_REFLASH
@@ -44,12 +43,8 @@
 #define ENABLE_SYS_REFLASH			true
 #define SYSFS_DIR_NAME				"reflash"
 #define CUSTOM_DIR_NAME				"custom"
-#define FW_IMAGE_NAME_L9				"s3908p_xiaomi_l9_spi.img"
-#define FW_IMAGE_NAME_MANUAL_L9		"s3908p_xiaomi_l9_spi.img"
-#define FW_IMAGE_NAME_K9B				"s3908p_xiaomi_k9b_spi.img"
-#define FW_IMAGE_NAME_MANUAL_K9B		"s3908p_xiaomi_k9b_spi.img"
-#define FW_IMAGE_NAME_K9E				"s3908p_xiaomi_k9e_spi.img"
-#define FW_IMAGE_NAME_MANUAL_K9E		"s3908p_xiaomi_k9e_spi.img"
+#define FW_IMAGE_NAME				"s3908p_xiaomi_k9b_spi.img"
+#define FW_IMAGE_NAME_MANUAL		"s3908p_xiaomi_k9b_spi.img"
 #define BOOT_CONFIG_ID				"BOOT_CONFIG"
 #define APP_CODE_ID					"APP_CODE"
 #define PROD_TEST_ID				"APP_PROD_TEST"
@@ -936,51 +931,30 @@ static int reflash_get_fw_image(void)
 {
 	int retval;
 	struct syna_tcm_hcd *tcm_hcd = reflash_hcd->tcm_hcd;
-        const char *fw_image_name = NULL;
-        const char *fw_image_name_manual= NULL;
 
 	LOGE(tcm_hcd->pdev->dev.parent, "-----enter-----%s\n", __func__);
 	/* reflash_hcd->reflash_by_manual=false; */
-
-	switch (get_hw_version_platform()) {
-		case HARDWARE_PROJECT_L9:
-			fw_image_name = FW_IMAGE_NAME_L9;
-			fw_image_name_manual = FW_IMAGE_NAME_MANUAL_L9;
-			break;
-		case HARDWARE_PROJECT_K9B:
-			fw_image_name = FW_IMAGE_NAME_K9B;
-			fw_image_name_manual = FW_IMAGE_NAME_MANUAL_K9B;
-			break;
-		case HARDWARE_PROJECT_K9E:
-			fw_image_name = FW_IMAGE_NAME_K9E;
-			fw_image_name_manual = FW_IMAGE_NAME_MANUAL_K9E;
-			break;
-		default:
-			// Nothing
-			break;
-	}
-
 
 	if (reflash_hcd->image == NULL) {
 		if (reflash_hcd->reflash_by_manual == false) {
 
 			retval = request_firmware(&reflash_hcd->fw_entry,
-				fw_image_name, tcm_hcd->pdev->dev.parent);
+				FW_IMAGE_NAME, tcm_hcd->pdev->dev.parent);
 			if (retval < 0) {
 				LOGE(tcm_hcd->pdev->dev.parent,
 						"Failed to request %s\n",
-						fw_image_name);
+						FW_IMAGE_NAME);
 				return retval;
 			}
 
 		} else {
 			retval = request_firmware(&reflash_hcd->fw_entry,
-						fw_image_name_manual,
+						FW_IMAGE_NAME_MANUAL,
 						tcm_hcd->pdev->dev.parent);
 			if (retval < 0) {
 				LOGE(tcm_hcd->pdev->dev.parent,
 						"Failed to request %s\n",
-						fw_image_name_manual);
+						FW_IMAGE_NAME_MANUAL);
 				return retval;
 			}
 		}
@@ -1044,7 +1018,7 @@ static enum update_area reflash_compare_id_info(void)
 				"Image firmware ID not equal device firmware ID\n");
 		update_area = FIRMWARE_CONFIG;
 		goto exit;
-	} else if (image_fw_id < device_fw_id) {
+	} else {
 		LOGE(tcm_hcd->pdev->dev.parent,
 				"Image firmware ID older than device firmware ID\n");
 		update_area = NONE;
@@ -1055,12 +1029,12 @@ static enum update_area reflash_compare_id_info(void)
 	device_config_id = tcm_hcd->app_info.customer_config_id;
 
 	for (idx = 0; idx < 16; idx++) {
-		if (image_config_id[idx] > device_config_id[idx]) {
+		if (image_config_id[idx] != device_config_id[idx]) {
 			LOGE(tcm_hcd->pdev->dev.parent,
 					"Image config ID newer than device config ID\n");
 			update_area = CONFIG_ONLY;
 			goto exit;
-		} else if (image_config_id[idx] < device_config_id[idx]) {
+		} else {
 			LOGE(tcm_hcd->pdev->dev.parent,
 					"Image config ID older than device config ID\n");
 			update_area = NONE;
