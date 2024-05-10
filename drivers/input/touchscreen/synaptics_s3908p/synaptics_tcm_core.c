@@ -895,7 +895,7 @@ static ssize_t syna_tcm_sysfs_cb_debug_store(struct device *dev,
 	return retval;
 }
 
-/*static ssize_t syna_tcm_sysfs_test_store(struct device *dev,
+static ssize_t syna_tcm_sysfs_test_store(struct device *dev,
 				     struct device_attribute *attr,
 				     const char *buf, size_t count)
 {
@@ -909,7 +909,7 @@ static ssize_t syna_tcm_sysfs_cb_debug_store(struct device *dev,
 }
 static DEVICE_ATTR(fod_test, (S_IRUGO | S_IWUSR | S_IWGRP), NULL,\
 syna_tcm_sysfs_test_store);
-*/
+
 
 #if (USE_KOBJ_SYSFS)
 static ssize_t syna_tcm_sysfs_misc_debug_store(struct kobject *kobj,
@@ -3790,12 +3790,16 @@ mod_resume:
 		}
 	}
 
+
 	mutex_unlock(&mod_pool.mutex);
 
 	retval = 0;
 
 exit:
 	tcm_hcd->in_sleep = false;
+
+	touch_free_objects(tcm_hcd);
+
 	tcm_hcd->in_suspend = false;
 
 	return retval;
@@ -6191,7 +6195,7 @@ static int syna_tcm_probe(struct platform_device *pdev)
 	tcm_hcd->syna_tcm_class = class_create(THIS_MODULE, "touch");
 #endif
 
-	/*tcm_hcd->syna_tcm_dev =
+	tcm_hcd->syna_tcm_dev =
 		device_create(tcm_hcd->syna_tcm_class, NULL,
 			tcm_hcd->tp_dev_num, tcm_hcd, "tp_dev");
 	if (IS_ERR(tcm_hcd->syna_tcm_dev)) {
@@ -6205,7 +6209,7 @@ static int syna_tcm_probe(struct platform_device *pdev)
 	if (retval) {
 		LOGE(tcm_hcd->pdev->dev.parent,
 			"Failed to create fod_test sysfs group!\n");
-	}*/
+	}
 
 #ifdef SYNAPTICS_POWERSUPPLY_CB
 	INIT_DELAYED_WORK(&tcm_hcd->power_supply_work, syna_tcm_power_supply_work);
@@ -6273,7 +6277,7 @@ static int syna_tcm_probe(struct platform_device *pdev)
 			"read touchmode data from IC failed!\n");
 	}
 	syna_tcm_init_touchmode_data();
-	// xiaomitouch_register_modedata(0, p_xiaomi_touch_interfaces);
+	xiaomitouch_register_modedata(0, p_xiaomi_touch_interfaces);
 #endif
 
 prepare_modules:
@@ -6290,6 +6294,7 @@ prepare_modules:
 	return 0;
 
 err_enable_irq:
+	cancel_delayed_work_sync(&tcm_hcd->power_supply_work);
 	power_supply_unreg_notifier(&tcm_hcd->power_supply_notifier);
 	cancel_delayed_work_sync(&tcm_hcd->polling_work);
 	flush_workqueue(tcm_hcd->polling_workqueue);
@@ -6403,6 +6408,7 @@ static int syna_tcm_remove(struct platform_device *pdev)
 	const struct syna_tcm_board_data *bdata = tcm_hcd->hw_if->bdata;
 
 	LOGI(tcm_hcd->pdev->dev.parent, "syna_tcm_remove enter!\n");
+	tp_probe_success = false;
 	touch_remove(tcm_hcd);
 
 	mutex_lock(&mod_pool.mutex);
@@ -6425,6 +6431,9 @@ static int syna_tcm_remove(struct platform_device *pdev)
 	destroy_workqueue(mod_pool.workqueue);
 
 	mutex_unlock(&mod_pool.mutex);
+
+	cancel_delayed_work_sync(&tcm_hcd->power_supply_work);
+	power_supply_unreg_notifier(&tcm_hcd->power_supply_notifier);
 
 	if (tcm_hcd->irq_enabled && bdata->irq_gpio >= 0) {
 		disable_irq(tcm_hcd->irq);
@@ -6455,8 +6464,6 @@ static int syna_tcm_remove(struct platform_device *pdev)
 #ifdef SYNA_TCM_XIAOMI_TOUCHFEATURE
 	syna_tcm_xiaomi_touchfeature_exit(tcm_hcd);
 #endif
-
-	power_supply_unreg_notifier(&tcm_hcd->power_supply_notifier);
 
 #ifdef REPORT_NOTIFIER
 	kthread_stop(tcm_hcd->notifier_thread);
